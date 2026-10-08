@@ -107,3 +107,25 @@ label.chip{display:inline-flex;align-items:center;gap:6px;min-height:40px;paddin
   th,td{padding:6px;font-size:.8rem}
   #toasts{left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom))}
 }
+
+/* ===== Chú thích tiêu chí 6, hộp thoại dài ===== */
+.lg{margin:0 0 10px;padding-left:18px;font-size:.8rem;color:var(--mu)}
+.mdl{max-height:90vh;overflow-y:auto}
+@supports (height:100dvh){.mdl{max-height:90dvh}}
+td .warnbox .row{margin:6px 0 0}
+
+/* ===== Bảng tổng hợp: dạng thẻ trên điện thoại ===== */
+.who{display:flex;align-items:center;gap:8px}
+.wr td{border-bottom:1px solid var(--bd)}
+@media(max-width:600px){
+  .st .hd{display:none}
+  .st,.st tbody{display:block}
+  .st tr{display:block}
+  .st tr:not(.hd):not(.wr){border:1px solid var(--bd);border-radius:12px;margin-bottom:10px;padding:6px 10px}
+  .st tr.wr{margin:-6px 0 10px}
+  .st td{display:flex;justify-content:space-between;align-items:center;gap:8px;border:0;padding:4px 0;font-size:.88rem}
+  .st td[data-l]::before{content:attr(data-l);font-weight:600;color:var(--mu)}
+  .st td.who{font-weight:600}
+  .st .wr td{display:block}
+  td input[type=number]{width:90px}
+}

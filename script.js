@@ -11,6 +11,10 @@ const CRIT = [
   ["Thảo luận và điều hành nhóm", [["Tốt",20],["Khá",15],["Bình thường",10],["Không được tốt",5],["Kém",0]]]
 ];
 
+/* ===== Quy tắc cảnh báo theo rubric (đổi số ở đây nếu thầy yêu cầu khác) ===== */
+const RULE = { MIN_RATERS: 3, SELF_MAX: 90, GAP: 20, SHARE: 0.75 }; // tối thiểu 3 người chấm; tự chấm ≥90; "thấp" = thấp hơn tự chấm ≥20 điểm; từ 3/4 số người còn lại
+const DESC6 = ["tham gia đầy đủ, hỗ trợ tốt", "vắng 1 buổi điều hành/thảo luận, hỗ trợ tốt", "tham gia đầy đủ, hỗ trợ bình thường/không hỗ trợ", "vắng 1 buổi điều hành/thảo luận, hỗ trợ bình thường", "vắng buổi điều hành và thảo luận, không hỗ trợ/hỗ trợ kém"];
+
 /* ===== Trạng thái toàn cục ===== */
 let S = null, meId = localStorage.getItem("tf_me"), tab = "tasks", gid = null, draft = {}, stat = "ok";
 
@@ -25,6 +29,7 @@ const ymd = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0
 const today = () => ymd(new Date());
 const addDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return ymd(d); };
 const dayDiff = (a, b) => { const p = x => { const [y, m, d] = x.split("-").map(Number); return new Date(y, m - 1, d); }; return Math.round((p(b) - p(a)) / 864e5); };
+const addTo = (x, n) => { const [y, m, d] = x.split("-").map(Number); return ymd(new Date(y, m - 1, d + n)); }; // cộng ngày vào một ngày cho trước
 const vnDate = x => x ? x.split("-").reverse().join("/") : "";
 const fmt = ms => new Date(ms).toLocaleDateString("vi-VN");
 let tf = { name: "", uid: "", due: today(), after: "" }; // nháp form giao việc: không mất khi render lại
@@ -35,7 +40,7 @@ function seed() {
 }
 
 /* ===== Đọc / ghi Firebase REST (hoặc localStorage) ===== */
-function norm(s) { s.users ||= []; s.groups ||= []; s.tasks ||= []; s.ratings ||= {}; s.finals ||= {}; return s; }
+function norm(s) { s.users ||= []; s.groups ||= []; s.tasks ||= []; s.ratings ||= {}; s.finals ||= {}; s.applied ||= {}; return s; }
 async function load() {
   if (!CFG.DB_URL) { const r = localStorage.getItem("tf_state"); return r ? norm(JSON.parse(r)) : seed(); }
   const r = await fetch(CFG.DB_URL + "/state.json");
@@ -86,6 +91,7 @@ const myGroups = () => me().admin ? S.groups : S.groups.filter(g => g.members.in
 const grp = () => myGroups().find(g => g.id === gid) || (gid = myGroups()[0]?.id, myGroups()[0]);
 const isLead = g => g && (me().admin || g.leader === meId);
 const gTasks = g => S.tasks.filter(t => t.gid === g.id);
+const dependsOn = (ts, startId, targetId) => { let c = startId, n = 0; while (c && n++ < 200) { if (c === targetId) return true; c = ts.find(x => x.id === c)?.after; } return false; }; // việc start có (gián tiếp) phụ thuộc target?
 const blocked = t => t.after && !t.done && !S.tasks.find(x => x.id === t.after)?.done;
 
 /* ===== Điểm đánh giá ===== */
@@ -154,6 +160,7 @@ const taskCard = lead => t => {
   }
   const acts = (can && !t.done && !bl ? `<button class="btn pri sm" data-a="done" data-v="${t.id}">✔ Done</button>` : "")
     + (can && t.done ? `<button class="btn sm" data-a="undo" data-v="${t.id}">↩ Hoàn tác</button>` : "")
+    + (lead ? `<button class="btn sm" data-a="editTask" data-v="${t.id}">✏️ Sửa</button>` : "")
     + (lead ? `<button class="btn sm dan" data-a="delTask" data-v="${t.id}">🗑 Xoá</button>` : "");
   return `<div class="card task ${t.done ? "done" : ""}">${av(u)}<div class="nm"><b>${esc(t.name)}</b><br><span class="mu">${esc(u?.name)}${t.due ? " · 📅 " + vnDate(t.due) : ""}${pre ? ` · ↳ Sau: ${esc(pre.name)}` : ""}</span></div>
     <div class="chs">${st}${dl}</div>${acts ? `<div class="acts">${acts}</div>` : ""}</div>`;
@@ -174,28 +181,36 @@ function rateView(g) {
     const part = d.reduce((s, v, i) => s + (v != null ? CRIT[i][1][v][1] : 0), 0);
     return `<div class="card">${tot != null ? `<span class="badge ${cls(tot)}">${tot}/100</span>` : `<span class="badge y">~${part}</span>`}
       <h3>${av(m)} ${esc(m.name)} ${m.id === meId ? "(bạn)" : ""}</h3>
-      ${CRIT.map(([n, ls], c) => `<div><b>${c + 1}. ${n}</b><div class="pills">${ls.map(([l, p], v) => `<button class="pill ${d[c] === v ? "on" : ""}" data-a="pick" data-k="${k}" data-c="${c}" data-v="${v}">${l} (${p})</button>`).join("")}</div></div>`).join("")}</div>`;
+      ${CRIT.map(([n, ls], c) => `<div><b>${c + 1}. ${n}</b><div class="pills">${ls.map(([l, p], v) => `<button class="pill ${d[c] === v ? "on" : ""}" data-a="pick" data-k="${k}" data-c="${c}" data-v="${v}">${l} (${p})</button>`).join("")}</div>${c === 5 ? `<ul class="lg">${ls.map(([l], v) => `<li><b>${l}</b>: ${DESC6[v]}</li>`).join("")}</ul>` : ""}</div>`).join("")}</div>`;
   }).join("");
   return h + `<button class="btn pri" data-a="saveRate">💾 Lưu đánh giá</button>`;
+}
+
+/* ===== Tính điểm tổng hợp & điều kiện cảnh báo cho 1 thành viên ===== */
+function calc(st, g, mid) {
+  const R = st.ratings[g.id] || {};
+  const self = score(R[mid]?.[mid]), ld = score(R[g.leader]?.[mid]);
+  const avgOf = a => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 10) / 10 : null;
+  const avg = avgOf(g.members.filter(x => x !== mid && x !== g.leader).map(x => score(R[x]?.[mid])).filter(x => x != null)); // TB các thành viên khác (không tính bản thân & trưởng nhóm)
+  const W = g.members.filter(x => x !== mid).map(x => score(R[x]?.[mid])).filter(x => x != null); // tất cả người còn lại đã chấm
+  const low = self != null ? W.filter(x => self - x >= RULE.GAP).length : 0;
+  const warn = self != null && self >= RULE.SELF_MAX && W.length >= RULE.MIN_RATERS && low / W.length >= RULE.SHARE;
+  return { self, ld, avg, W, low, warn, base: avg ?? avgOf(W), rated: W.length + (self != null ? 1 : 0) };
 }
 
 /* ===== Tab Tổng hợp (Bảng 5) ===== */
 function sumView(g) {
   if (!g || !g.leader) return empty("👑", "Cần có nhóm và trưởng nhóm để tổng hợp.");
-  const R = S.ratings[g.id] || {}, mem = g.members.map(user).filter(Boolean);
-  const rows = mem.map(m => {
-    const self = score(R[m.id]?.[m.id]), ld = score(R[g.leader]?.[m.id]);
-    const o = g.members.filter(x => x !== m.id && x !== g.leader).map(x => score(R[x]?.[m.id])).filter(x => x != null);
-    const avg = o.length ? Math.round(o.reduce((a, b) => a + b, 0) / o.length * 10) / 10 : null;
-    const fin = S.finals[g.id]?.[m.id] ?? ld;
-    return { m, self, avg, ld, fin };
-  });
+  const mem = g.members.map(user).filter(Boolean), F = S.finals[g.id] || {}, AP = S.applied?.[g.id] || {};
+  const rows = mem.map(m => { const c = calc(S, g, m.id); return { m, ...c, fin: F[m.id] ?? c.ld }; });
   const best = Math.max(...rows.map(r => r.fin ?? -1));
-  return `<div class="card tw"><h3>📊 Bảng tổng hợp – ${esc(g.name)}</h3><table><tr><th>Thành viên</th><th>Vị trí</th><th>Tự đánh giá</th><th>TB thành viên khác</th><th>Trưởng nhóm chấm</th><th>Điểm cuối</th></tr>
-  ${rows.map(r => `<tr class="${r.fin === best && best >= 0 ? "best" : ""}"><td>${av(r.m)} ${esc(r.m.name)}</td><td>${r.m.id === g.leader ? "Trưởng nhóm" : "Thành viên"}</td>
-    <td>${r.self ?? "–"}</td><td>${r.avg ?? "–"}</td><td>${r.ld ?? "–"}</td>
-    <td><input type="number" min="0" max="100" data-f="fin" data-u="${r.m.id}" value="${r.fin ?? ""}">${r.fin === best && best >= 0 ? " 🏆" : ""}
-    ${r.self != null && r.avg != null && r.self - r.avg >= 20 ? `<div class="warnbox">⚠️ Tự chấm cao hơn TB nhóm ${Math.round(r.self - r.avg)} điểm – nên dùng điểm trung bình (${r.avg}).</div>` : ""}</td></tr>`).join("")}</table></div>`;
+  return `<div class="card tw"><h3>📊 Bảng tổng hợp – ${esc(g.name)}</h3><table class="st"><tr class="hd"><th>Thành viên</th><th>Vị trí</th><th>Tự đánh giá</th><th>TB thành viên khác</th><th>Trưởng nhóm chấm</th><th>Điểm cuối</th></tr>
+  ${rows.map(r => `<tr class="${r.fin === best && best >= 0 ? "best" : ""}"><td class="who">${av(r.m)} <span>${esc(r.m.name)}<div class="mu">Đã chấm: ${r.rated}/${mem.length}</div></span></td><td data-l="Vị trí">${r.m.id === g.leader ? "Trưởng nhóm" : "Thành viên"}</td>
+    <td data-l="Tự đánh giá">${r.self ?? "–"}</td><td data-l="TB thành viên khác">${r.avg ?? "–"}</td><td data-l="Trưởng nhóm chấm">${r.ld ?? "–"}</td>
+    <td data-l="Điểm cuối"><span><input type="number" min="0" max="100" data-f="fin" data-u="${r.m.id}" value="${r.fin ?? ""}" aria-label="Điểm cuối của ${esc(r.m.name)}">${r.fin === best && best >= 0 ? " 🏆" : ""}</span>
+    ${AP[r.m.id] ? `<span class="chip ok">✔ Đã dùng điểm TB</span> <button class="btn sm" data-a="unavg" data-v="${r.m.id}">Bỏ áp dụng</button>` : ""}</td></tr>
+    ${r.warn ? `<tr class="wr"><td colspan="6"><div class="warnbox">⚠️ <b>${esc(r.m.name)}</b> tự chấm ${r.self} (mức tối đa) nhưng ${r.low}/${r.W.length} người còn lại chấm thấp hơn từ ${RULE.GAP} điểm. Theo rubric, trưởng nhóm có quyền dùng điểm trung bình${r.base != null ? ` (${r.base})` : ""}.${!AP[r.m.id] && r.base != null ? `<div class="row"><button class="btn sm pri" data-a="useavg" data-v="${r.m.id}">Dùng điểm trung bình</button></div>` : ""}</div></td></tr>` : ""}`).join("")}</table>
+  <p class="mu">Quy tắc cảnh báo: tự chấm ≥ ${RULE.SELF_MAX}, có ít nhất ${RULE.MIN_RATERS} người khác chấm, và từ ${RULE.SHARE * 100}% số người đó chấm thấp hơn tự chấm ≥ ${RULE.GAP} điểm. Cảnh báo chỉ mang tính gợi ý; trưởng nhóm quyết định điểm cuối.</p></div>`;
 }
 
 /* ===== Tab Quản trị ===== */
@@ -228,6 +243,19 @@ document.addEventListener("click", e => {
     mutate(s => { s.tasks.push(t); }, "Đã giao việc").then(ok => { if (ok) { tf.name = ""; tf.after = ""; render(); } });
   }
   if (a === "dueq") { tf.due = v === "x" ? "" : addDays(+v); $("#td").value = tf.due; } // chọn nhanh hạn chót
+  if (a === "editTask") openEdit(v);
+  if (a === "dueq2") { const c = $("#ed").value; $("#ed").value = v === "x" ? "" : v[0] === "r" ? addTo(c || today(), +v.slice(1)) : addDays(+v); } // gia hạn tính từ hạn hiện tại
+  if (a === "editSave") { // lưu chỉnh sửa nhiệm vụ (đọc lại state mới nhất trước khi sửa)
+    const name = $("#en").value.trim(), uid = $("#eu").value, due = $("#ed").value, after = $("#ea").value;
+    if (!name) return toast("Tên nhiệm vụ không được để trống", "err");
+    mutate(s => {
+      const t = s.tasks.find(x => x.id === v); if (!t) return "Nhiệm vụ không còn tồn tại";
+      if (after && (after === t.id || dependsOn(s.tasks, after, t.id))) return "Việc này sẽ tạo vòng lặp phụ thuộc";
+      Object.assign(t, { name, uid, due, after });
+    }, "Đã cập nhật nhiệm vụ").then(ok => ok && closeModal());
+  }
+  if (a === "useavg") { const g = grp(); mutate(s => { const c = calc(s, s.groups.find(x => x.id === g.id), v); if (c.base == null) return "Chưa có điểm trung bình để áp dụng"; (s.finals[g.id] ||= {})[v] = c.base; (s.applied[g.id] ||= {})[v] = true; }, "Đã dùng điểm trung bình"); }
+  if (a === "unavg") { const g = gid; mutate(s => { delete s.finals[g]?.[v]; delete s.applied[g]?.[v]; }, "Đã bỏ áp dụng"); }
   if (a === "pwd") openPw(v);
   if (a === "closeM" && e.target === b) closeModal();
   if (a === "pwSave") { // lưu mật khẩu mới
@@ -286,6 +314,20 @@ function openPw(t) {
     <div class="row"><button class="btn pri" data-a="pwSave" data-v="${t}">Lưu mật khẩu</button><button class="btn" data-a="closeM">Huỷ</button></div></div>`;
   document.body.append(m); (own ? $("#pw0") : $("#pw1")).focus();
 }
+function openEdit(tid) {
+  const t = S.tasks.find(x => x.id === tid), g = t && S.groups.find(x => x.id === t.gid); if (!t || !g) return; closeModal();
+  const mem = g.members.map(user).filter(Boolean), opts = S.tasks.filter(x => x.gid === t.gid && x.id !== t.id && !dependsOn(S.tasks, x.id, t.id));
+  const m = document.createElement("div"); m.id = "modal"; m.className = "ov"; m.dataset.a = "closeM";
+  m.innerHTML = `<div class="card mdl" role="dialog" aria-modal="true"><h3>✏️ Sửa nhiệm vụ</h3>
+    <label class="fl">Tên nhiệm vụ<input id="en" value="${esc(t.name)}" maxlength="120" autocomplete="off"></label>
+    <label class="fl">Người phụ trách<select id="eu">${mem.map(u => `<option value="${u.id}" ${u.id === t.uid ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></label>
+    <div class="fl"><label for="ed">Hạn chót <span class="mu">(chạm vào ô để mở lịch)</span></label><input id="ed" type="date" value="${esc(t.due || "")}">
+      <div class="qd">${[["0", "Hôm nay"], ["1", "+1 ngày"], ["2", "+2 ngày"], ["r1", "Gia hạn +1"], ["r3", "Gia hạn +3"], ["x", "Không hạn"]].map(([k, l]) => `<button type="button" class="pill" data-a="dueq2" data-v="${k}">${l}</button>`).join("")}</div></div>
+    <label class="fl">Làm sau việc<select id="ea"><option value="">(không)</option>${opts.map(x => `<option value="${x.id}" ${x.id === t.after ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>
+    ${t.done ? `<p class="mu">Việc đã hoàn thành: đổi hạn chót sẽ tính lại "đúng hạn / trễ hạn" theo ngày đã xong.</p>` : ""}
+    <div class="row"><button class="btn pri" data-a="editSave" data-v="${t.id}">Lưu thay đổi</button><button class="btn" data-a="closeM">Huỷ</button></div></div>`;
+  document.body.append(m); $("#en").focus();
+}
 const closeModal = () => $("#modal")?.remove();
 /* Chạm vào ô ngày là mở bảng chọn lịch */
 document.addEventListener("click", e => { if (e.target.type === "date") { try { e.target.showPicker(); } catch {} } });
@@ -299,12 +341,12 @@ document.addEventListener("change", e => {
   if (f === "grp") { gid = e.target.value; draft = {}; render(); }
   if (f === "mem") mutate(s => { const g = s.groups.find(x => x.id === d.g); g.members = g.members.filter(m => m !== d.u); if (e.target.checked) g.members.push(d.u); else if (g.leader === d.u) g.leader = ""; });
   if (f === "lead") mutate(s => { s.groups.find(x => x.id === d.g).leader = e.target.value; }, "Đã chọn trưởng nhóm");
-  if (f === "fin") { const n = Math.min(100, Math.max(0, +e.target.value)), g = gid; mutate(s => { ((s.finals[g] ||= {}))[d.u] = n; }, "Đã lưu điểm cuối"); }
+  if (f === "fin") { const raw = e.target.value.trim(), g = gid; mutate(s => { const F = (s.finals[g] ||= {}); if (raw === "") delete F[d.u]; else F[d.u] = Math.min(100, Math.max(0, +raw)); if (s.applied[g]) delete s.applied[g][d.u]; }, "Đã lưu điểm cuối"); }
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") closeModal();
   if (e.key !== "Enter" || e.target.tagName !== "INPUT") return;
-  const k = e.target.dataset.k === "name" ? "addTask" : { lu: "login", lp: "login", nn: "addUser", nu: "addUser", np: "addUser", gn: "addGroup", pw0: "pwSave", pw1: "pwSave", pw2: "pwSave" }[e.target.id];
+  const k = e.target.dataset.k === "name" ? "addTask" : { lu: "login", lp: "login", nn: "addUser", nu: "addUser", np: "addUser", gn: "addGroup", en: "editSave", pw0: "pwSave", pw1: "pwSave", pw2: "pwSave" }[e.target.id];
   if (k) $(`[data-a=${k}]`)?.click();
 });
 
